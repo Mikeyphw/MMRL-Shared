@@ -126,6 +126,28 @@ class Propagation(unittest.TestCase):
         self.assertFalse(result['auto_merge'])
         self.assertNotIn('checkout',result['consumers'][0])
 
+    def test_safe_api_failure_identifies_endpoint_without_secrets(self):
+        bad=subprocess.CompletedProcess([],1,'','gh: Resource not accessible by integration (HTTP 403)\nsecret-token')
+        with patch.object(n.subprocess,'run',return_value=bad):
+            with self.assertRaises(n.Refusal) as cm:
+                n.gh('repos/Mikeyphw/MMRL-Shared/actions/runs?branch=main&per_page=100')
+        message=str(cm.exception)
+        self.assertIn('endpoint=repos/Mikeyphw/MMRL-Shared/actions/runs',message)
+        self.assertIn('http=403',message)
+        self.assertNotIn('secret-token',message)
+
+    def test_real_consumer_fixture_form_two_gitlink_mentions(self):
+        for fixture in (
+            'PIN = "'+OLD+'"\nSUB = "third_party/mmrl-shared"\n'+
+            "self.assertIn('third_party/mmrl-shared/src/main/kotlin', adapter)\n",
+            'EXPECTED_SHA = "'+OLD+'"\nSUB = "third_party/mmrl-shared"\n'+
+            "self.assertIn('third_party/mmrl-shared/src/main/kotlin', adapter)\n",
+        ):
+            self.assertTrue(n.approved_fixture(fixture, OLD))
+            self.assertFalse(n.approved_fixture(fixture+OLD, OLD))
+            self.assertFalse(n.approved_fixture(fixture.replace('SUB =', 'OTHER ='), OLD))
+            self.assertFalse(n.approved_fixture(fixture+'third_party/mmrl-shared', OLD))
+
     def test_shared_api_uses_workflow_scoped_read_token(self):
         with patch.dict(os.environ, {
             'GH_TOKEN':'consumer-only-token',

@@ -64,6 +64,14 @@ def run(args: list[str], *, cwd: Path | None = None, stdin: str | None = None,
     if p.returncode:
         if allow_404 and ('HTTP 404' in p.stderr or 'Not Found' in p.stderr):
             return None
+        if args[0] == 'gh':
+            # Keep diagnostic context but never include raw stderr/stdout or tokens.
+            endpoint = next((a.split('?', 1)[0] for a in args if a.startswith('repos/')), 'unknown')
+            if not re.fullmatch(r'repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+', endpoint):
+                endpoint = 'unknown'
+            match = re.search(r'\bHTTP\s+([1-5][0-9]{2})\b', p.stderr or '')
+            status = match.group(1) if match else 'unknown'
+            raise Refusal(f'gh operation failed (endpoint={endpoint}, http={status}, exit={p.returncode})')
         raise Refusal(f'{args[0]} operation failed (exit={p.returncode})')
     return p.stdout.strip()
 
@@ -143,6 +151,15 @@ def tree_pin(path: Path, rev: str) -> str:
     return match.group(1)
 
 
+def approved_fixture(fixture: str, pin: str) -> bool:
+    # Both consumer fixtures legitimately mention the gitlink twice: once as
+    # SUB and once in the Kotlin adapter path. Reject any other shape.
+    return (fixture.count(pin) == 1 and
+            fixture.count('SUB = "third_party/mmrl-shared"') == 1 and
+            fixture.count('third_party/mmrl-shared/src/main/kotlin') == 1 and
+            fixture.count('third_party/mmrl-shared') == 2)
+
+
 def prepare(c: Consumer, sha: str, work: Path) -> dict[str,Any]:
     base_remote=ref(c.repo,c.base)
     if not base_remote:
@@ -186,7 +203,7 @@ def prepare(c: Consumer, sha: str, work: Path) -> dict[str,Any]:
     if not re.fullmatch(r'100644 blob [0-9a-f]{40}\t'+re.escape(c.pin_fixture),mode_line):
         raise Refusal('Unexpected source-test fixture mode or path')
     fixture=git(work,'show',f'{parent}:{c.pin_fixture}')
-    if fixture.count(parent_pin)!=1 or fixture.count('third_party/mmrl-shared')!=1:
+    if not approved_fixture(fixture, parent_pin):
         raise Refusal('Pinned source-contract fixture is not the exact expected form')
     return {'consumer':c.slug,'repository':c.repo,'base':c.base,
             'base_head':base,'branch':BRANCH,'branch_head':head_feature,
