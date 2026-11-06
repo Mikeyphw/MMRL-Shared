@@ -1,0 +1,74 @@
+name: N05F Shared Kotlin Consumer PR Propagation
+
+on:
+  workflow_run:
+    workflows: ["N05A Shared Kotlin JVM contracts and staged Maven"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: n05f-shared-main-propagation
+  cancel-in-progress: false
+
+jobs:
+  propagate:
+    # Do not accept PR forks, pull_request events, or failed N05A runs.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == 'Mikeyphw/MMRL-Shared'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.MMRL_FEDERATION_TOKEN }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      N05F_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Checkout validated shared source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Require a separately provisioned cross-repository GitHub credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || {
+            echo 'N05F_REFUSED: configure MMRL_FEDERATION_TOKEN as an Actions secret.' >&2
+            exit 2
+          }
+          test "$(git rev-parse HEAD)" = "$N05F_SOURCE_SHA"
+
+      - name: Run N05F offline source, Git plumbing and safety regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/tests -p 'test_n05f.py' -v
+
+      - name: Verify exact validated source and plan both consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/n05f_propagate.py plan --sha "$N05F_SOURCE_SHA"
+
+      - name: Open or update source-pinned consumer PRs (never merge)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/n05f_propagate.py apply --sha "$N05F_SOURCE_SHA" \
+            --receipt "$RUNNER_TEMP/n05f-propagation.json"
+
+      - name: Publish source-bound propagation receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mmrl-n05f-propagation-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/n05f-propagation.json
+          if-no-files-found: warn
+          retention-days: 14
