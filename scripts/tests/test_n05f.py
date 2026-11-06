@@ -126,4 +126,33 @@ class Propagation(unittest.TestCase):
         self.assertFalse(result['auto_merge'])
         self.assertNotIn('checkout',result['consumers'][0])
 
+    def test_shared_api_uses_workflow_scoped_read_token(self):
+        with patch.dict(os.environ, {
+            'GH_TOKEN':'consumer-only-token',
+            'N05F_READ_TOKEN':'shared-read-token',
+            'GITHUB_ACTIONS':'true'}, clear=True):
+            with patch.object(n.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'{}','')) as mocked:
+                self.assertEqual(n.gh('repos/Mikeyphw/MMRL-Shared/git/ref/heads/main'),{})
+            process_env=mocked.call_args.kwargs['env']
+            self.assertEqual(process_env['GH_TOKEN'],'shared-read-token')
+            self.assertEqual(process_env['GITHUB_TOKEN'],'shared-read-token')
+
+    def test_consumer_api_retains_write_scoped_token(self):
+        with patch.dict(os.environ, {
+            'GH_TOKEN':'consumer-only-token',
+            'N05F_READ_TOKEN':'shared-read-token',
+            'GITHUB_ACTIONS':'true'}, clear=True):
+            with patch.object(n.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'{}','')) as mocked:
+                self.assertEqual(n.gh('repos/Mikeyphw/MMRL/git/ref/heads/next'),{})
+            self.assertEqual(mocked.call_args.kwargs['env']['GH_TOKEN'],'consumer-only-token')
+
+    def test_no_ambient_shared_token_fallback_on_hosted_runner(self):
+        with patch.dict(os.environ, {'GH_TOKEN':'consumer-only-token','GITHUB_ACTIONS':'true'},clear=True):
+            with self.assertRaisesRegex(n.Refusal,'read token is missing'):
+                n.gh('repos/Mikeyphw/MMRL-Shared/actions/runs?branch=main')
+
+    def test_shared_read_token_cannot_be_used_for_writes(self):
+        with self.assertRaisesRegex(n.Refusal,'read-only'):
+            n.gh('repos/Mikeyphw/MMRL-Shared/git/ref/heads/main',method='POST',payload={})
+
 if __name__=='__main__':unittest.main()

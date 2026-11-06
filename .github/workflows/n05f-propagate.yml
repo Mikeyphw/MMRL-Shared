@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: n05f-shared-main-propagation
@@ -25,6 +26,7 @@ jobs:
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ secrets.MMRL_FEDERATION_TOKEN }}
+      N05F_READ_TOKEN: ${{ github.token }}
       PYTHONDONTWRITEBYTECODE: '1'
       N05F_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:

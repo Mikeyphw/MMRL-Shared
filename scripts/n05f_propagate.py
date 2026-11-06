@@ -39,10 +39,22 @@ class Refusal(Exception):
 
 
 def run(args: list[str], *, cwd: Path | None = None, stdin: str | None = None,
-        allow_404: bool = False, timeout: int = 120) -> str | None:
+        allow_404: bool = False, timeout: int = 120,
+        auth: str = 'consumer') -> str | None:
     env = os.environ.copy()
     env['GIT_TERMINAL_PROMPT'] = '0'
     env['GIT_CONFIG_NOSYSTEM'] = '1'
+    if auth == 'shared':
+        # The cross-repository PAT is intentionally scoped ONLY to consumers.
+        # Read MMRL-Shared through its own short-lived GitHub Actions token.
+        read_token = os.environ.get('N05F_READ_TOKEN', '')
+        if not read_token and os.environ.get('GITHUB_ACTIONS') == 'true':
+            raise Refusal('N05F shared-source read token is missing; refusing consumer-token fallback')
+        if read_token:
+            env['GH_TOKEN'] = read_token
+            env['GITHUB_TOKEN'] = read_token
+    elif auth != 'consumer':
+        raise Refusal('Unsupported GitHub credential route')
     # No network commands are permitted to log secrets or their raw errors.
     try:
         p = subprocess.run(args, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -59,9 +71,13 @@ def run(args: list[str], *, cwd: Path | None = None, stdin: str | None = None,
 def gh(path: str, *, method: str = 'GET', payload: dict | None = None,
        allow_404: bool = False) -> Any:
     args = ['gh','api','-H','Accept: application/vnd.github+json','--method',method,path]
+    shared_read = path.startswith(f'repos/{SOURCE}/')
+    if shared_read and (method != 'GET' or payload is not None):
+        raise Refusal('Shared-source credential is read-only')
     raw = run(args + (['--input','-'] if payload is not None else []),
               stdin=json.dumps(payload) if payload is not None else None,
-              allow_404=allow_404)
+              allow_404=allow_404,
+              auth='shared' if shared_read else 'consumer')
     if raw is None:
         return None
     try:
