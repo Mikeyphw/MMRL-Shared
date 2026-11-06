@@ -1,6 +1,7 @@
 package io.github.mikeyphw.mmrl.shared
 
 /** Strict ASCII GitHub repository identity; does not imply a trusted publisher. */
+@ConsistentCopyVisibility
 data class GitHubRepository private constructor(val owner: String, val name: String) {
     val fullName: String get() = "$owner/$name"
 

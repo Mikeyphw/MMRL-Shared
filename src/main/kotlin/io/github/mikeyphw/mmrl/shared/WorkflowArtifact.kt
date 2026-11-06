@@ -1,6 +1,7 @@
 package io.github.mikeyphw.mmrl.shared
 
 /** GitHub Actions run provenance identity, not an authorization to install binaries. */
+@ConsistentCopyVisibility
 data class GitHubRunIdentity private constructor(
     val repository: GitHubRepository,
     val runId: Long,
