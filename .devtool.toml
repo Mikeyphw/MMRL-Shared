@@ -1,0 +1,12 @@
+# Source-only shared Kotlin contracts. JVM builds run in GitHub Actions, never Termux.
+[project]
+runner = "python"
+platform = "shared"
+
+[workspace]
+default_target = "mmrl_shared"
+
+[targets.mmrl_shared]
+root = "."
+runner = "python"
+platform = "shared"
