@@ -35,6 +35,11 @@ jobs:
           set -euo pipefail
           python3 scripts/verify_source.py
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Test source-bound N05F propagation lifecycle and negative contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s scripts/tests -p 'test_n05f.py' -v
       - name: Validate official Gradle wrapper and cache
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
         with:
