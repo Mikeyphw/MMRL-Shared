@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "repository": "Mikeyphw/MMRL-Shared",
+  "base_branch": "main",
+  "event": "pull_request",
+  "required_workflows": [
+    {
+      "name": "N05A Shared Kotlin JVM contracts and staged Maven",
+      "workflow_id": 409351241
+    }
+  ],
+  "release_qualification": "separate"
+}
