@@ -59,6 +59,79 @@ def branch_for(sha: str) -> str:
     return BRANCH_PREFIX + check_sha(sha)  # full SHA avoids prefix collisions
 
 
+
+# Raw subprocess diagnostics may contain credentials, credential-helper output,
+# API response bodies, or URL userinfo. Only fixed, reviewed labels leave this
+# process. Git failure stage is selected from a strict command allowlist.
+_GIT_OPERATIONS = frozenset({
+    'clone', 'fetch', 'ls-tree', 'show', 'rev-parse', 'read-tree',
+    'update-index', 'write-tree', 'hash-object', 'commit-tree',
+    'merge-base', 'diff', 'push',
+})
+
+
+def git_operation(argv: list[str]) -> str:
+    # Never echo argv; e.g. a future remote could accidentally contain a token.
+    for item in argv[1:]:
+        if item in _GIT_OPERATIONS:
+            return item
+    return 'unknown'
+
+
+def git_failure_category(stderr: str) -> str:
+    """Classify known Git failures; emit NO raw provider output or URLs."""
+    data = stderr.casefold()
+    if any(x in data for x in (
+        'authentication failed', 'bad credentials', 'could not read username',
+        'invalid username or password', 'invalid credentials',
+        'permission denied (publickey)',
+    )):
+        return 'AUTHENTICATION_FAILED'
+    if any(x in data for x in (
+        'write access to repository not granted',
+        'permission to ', 'resource not accessible by integration',
+        'repository not found', 'http 403', 'error: 403',
+        'the requested url returned error: 403',
+    )):
+        return 'REPOSITORY_ACCESS_DENIED'
+    if any(x in data for x in (
+        'gh013', 'gh006', 'repository rule violations',
+        'protected branch', 'push declined due to repository rule',
+    )):
+        return 'REPOSITORY_RULES_REFUSED'
+    if any(x in data for x in (
+        'non-fast-forward', 'fetch first', 'stale info',
+        'failed to update ref',
+    )):
+        return 'REF_CONFLICT'
+    if any(x in data for x in (
+        'could not resolve host', 'failed to connect',
+        'operation timed out', 'connection timed out',
+        'network is unreachable', 'gnutls',
+    )):
+        return 'NETWORK_OR_TLS_FAILURE'
+    if any(x in data for x in (
+        'missing object', 'unable to read ', 'invalid object',
+        'remote unpack failed', 'unpack failed',
+    )):
+        return 'GIT_OBJECT_FAILURE'
+    return 'UNCLASSIFIED_GIT_FAILURE'
+
+
+def consumer_write_capability(repo: str) -> None:
+    """Read-only advisory gate; GitHub push remains the actual authorization.
+
+    When GitHub explicitly reports that this token has no push permission,
+    refuse before modifying *either* consumer. A missing permission field is
+    NOT evidence of write access and cannot qualify hosted acceptance.
+    """
+    result = gh(f'repos/{repo}')
+    permissions = result.get('permissions') if isinstance(result, dict) else None
+    if isinstance(permissions, dict) and permissions.get('push') is False:
+        raise Refusal(f'N05F_CONSUMER_TOKEN_CONTENTS_WRITE_DENIED repo={repo}; '
+                      'check MMRL_FEDERATION_TOKEN repository selection and Contents write')
+
+
 def run(args: list[str], *, cwd: Path | None = None, stdin: str | None = None,
         allow_404: bool = False, timeout: int = 120,
         auth: str = 'consumer') -> str | None:
@@ -79,7 +152,9 @@ def run(args: list[str], *, cwd: Path | None = None, stdin: str | None = None,
                            stderr=subprocess.PIPE, text=True, cwd=cwd,
                            timeout=timeout, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise Refusal(f'{args[0]} unavailable or timed out') from exc
+        if args[0] == 'git':
+            raise Refusal(f'git {git_operation(args)} failed (category=UNAVAILABLE_OR_TIMEOUT)') from None
+        raise Refusal(f'{args[0]} unavailable or timed out') from None
     if p.returncode:
         if allow_404 and ('HTTP 404' in p.stderr or 'Not Found' in p.stderr):
             return None
@@ -91,6 +166,10 @@ def run(args: list[str], *, cwd: Path | None = None, stdin: str | None = None,
             match = re.search(r'\bHTTP\s+([1-5][0-9]{2})\b', p.stderr or '')
             status = match.group(1) if match else 'unknown'
             raise Refusal(f'gh operation failed (endpoint={endpoint}, http={status}, exit={p.returncode})')
+        if args[0] == 'git':
+            raise Refusal(f'git {git_operation(args)} failed '
+                          f'(category={git_failure_category(p.stderr)}, '
+                          f'exit={p.returncode}); raw provider output suppressed')
         raise Refusal(f'{args[0]} operation failed (exit={p.returncode})')
     return p.stdout.strip()
 
@@ -282,7 +361,13 @@ def commit_and_push(row: dict[str, Any]) -> str:
         raise Refusal('Shared or consumer base moved before push')
     if ref(row['repository'], row['branch'], missing_ok=True) != row['branch_head']:
         raise Refusal('Consumer feature branch moved before push')
-    git(root, 'push', 'origin', f'{new}:refs/heads/{row["branch"]}')  # no force
+    try:
+        git(root, 'push', 'origin', f'{new}:refs/heads/{row["branch"]}')  # no force
+    except Refusal as exc:
+        # Repository identity is a trusted static consumer; never print
+        # command arguments, raw Git stderr, or credentials.
+        raise Refusal(f'N05F_CONSUMER_PUSH_REFUSED repo={row["repository"]} '
+                      f'branch=source-sha {exc}') from None
     return new
 
 
@@ -320,6 +405,12 @@ def execute(sha: str, mode: str) -> dict[str, Any]:
             entries.append(prepare(c, sha, Path(tmp) / c.slug))
         # All consumers are validated before any mutation; no auto-merge.
         if mode == 'apply':
+            # Check all consumer token permissions before the first write.
+            # This is a conservative early refusal, not a substitute for a
+            # successful authenticated git push and PR POST.
+            for row, c in zip(entries, CONSUMERS):
+                if row['action'] not in {'unchanged', 'already-proposed'}:
+                    consumer_write_capability(c.repo)
             for row, c in zip(entries, CONSUMERS):
                 if row['action'] in {'unchanged', 'already-proposed'}:
                     continue

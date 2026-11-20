@@ -85,3 +85,44 @@ a fully isolated environment, so hosted `GITHUB_ACTIONS=true` does not mask
 that code path with the earlier missing-token refusal. A separate security test
 still verifies the missing read token fails closed without falling back to the
 consumer write credential. No actual Actions secret is required by N05A tests.
+
+## Fail-closed consumer Git diagnostics and credential recovery
+
+Hosted N05F attempt 1 and attempt 2 at Shared commit
+`a0b71e060453d950eb2fd766bb3a80c53b405201` reached the Git write phase
+but both stopped with `git operation failed (exit=128)`. Both exact-source
+consumer plans and the hosted source/negative tests passed. The prior generic
+error deliberately omitted raw Git stderr; it could not distinguish missing
+consumer write permissions from transport, Git object, or ruleset errors.
+
+The updated code preserves that secrecy boundary but reports the **allowlisted
+Git stage** and one bounded error category: `AUTHENTICATION_FAILED`,
+`REPOSITORY_ACCESS_DENIED`, `REPOSITORY_RULES_REFUSED`, `REF_CONFLICT`,
+`NETWORK_OR_TLS_FAILURE`, `GIT_OBJECT_FAILURE`, or
+`UNCLASSIFIED_GIT_FAILURE`. For push failures it also identifies the intended
+public consumer repository. It never echoes Git argv, remote URL credentials,
+subprocess stdout/stderr, token values, or raw provider response bodies.
+Hosted negative tests exercise every category, redaction, and preflight refusal.
+
+Before the first consumer write, N05F reads GitHub's `permissions.push` for
+**both** consumers using the write-scoped credential. An explicit `false`
+refuses without side effects. Missing/unknown metadata does **not** establish
+write authorization: actual authenticated push and PR creation remain the
+end-to-end acceptance gates. No rulesets, branch protection or privilege
+boundaries are bypassed.
+
+### If a hosted attempt reports `REPOSITORY_ACCESS_DENIED`
+
+Review the fine-grained PAT backing the Shared Actions secret
+`MMRL_FEDERATION_TOKEN`: resource owner `Mikeyphw`, selected **current** repos
+`Mikeyphw/MMRL` (ID `1463338730`) and `Mikeyphw/MMRL-LSPosed`
+(ID `1444635884`), **Contents: read/write** and **Pull requests: read/write**.
+If its old repository selection refers to the deleted MMRL instance, refresh
+the selection and replace the Actions secret if the token changed. Never print
+or commit a PAT. A successful `GET /repos/...` or a present secret does not
+prove Contents write permission. Retry the run only after access is confirmed.
+
+For other categories, inspect the named stage first. Do not blindly rerun a
+failed GitHub write or replay an already committed Devtool overlay. Source-SHA
+branches and `prepare` reconcile any existing remote feature ref and PR first;
+never force push, auto-merge, reset, or downgrade a Shared pin.
