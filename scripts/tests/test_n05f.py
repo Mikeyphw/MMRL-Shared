@@ -307,6 +307,95 @@ class N05FContracts(unittest.TestCase):
         with self.assertRaisesRegex(n.Refusal, 'read-only'):
             n.gh('repos/Mikeyphw/MMRL-Shared/git/ref/heads/main', method='POST', payload={})
 
+    def test_git_failure_diagnostics_are_bounded_and_redacted(self):
+        cases = (
+            ('remote: Write access to repository not granted.\nfatal: unable to access https://x-access-token:secret@example/repo: The requested URL returned error: 403',
+             'REPOSITORY_ACCESS_DENIED'),
+            ('fatal: Authentication failed for https://token:secret@host/repo',
+             'AUTHENTICATION_FAILED'),
+            ('remote: error: GH013: Repository rule violations found for refs/heads/main',
+             'REPOSITORY_RULES_REFUSED'),
+            ('! [rejected] commit -> branch (non-fast-forward)', 'REF_CONFLICT'),
+            ('fatal: unable to access: Could not resolve host: github.com',
+             'NETWORK_OR_TLS_FAILURE'),
+            ('fatal: remote unpack failed: index-pack failed', 'GIT_OBJECT_FAILURE'),
+            ('fatal: made-up error with secret-token', 'UNCLASSIFIED_GIT_FAILURE'),
+        )
+        for stderr, category in cases:
+            with self.subTest(category=category):
+                bad = subprocess.CompletedProcess([], 128, '', stderr)
+                with patch.object(n.subprocess, 'run', return_value=bad):
+                    with self.assertRaises(n.Refusal) as cm:
+                        n.git(Path('/tmp/nonexistent'), 'push', 'origin',
+                              'secret-token:refs/heads/feature')
+                message = str(cm.exception)
+                self.assertIn('git push failed', message)
+                self.assertIn('category=' + category, message)
+                self.assertNotIn('secret-token', message)
+                self.assertNotIn('x-access-token', message)
+                self.assertNotIn('example/repo', message)
+
+    def test_git_operation_label_is_allowlisted(self):
+        self.assertEqual(n.git_operation(['git', '-C', '/tmp', 'read-tree', 'x']), 'read-tree')
+        self.assertEqual(n.git_operation(['git', '-c', 'credential.helper=!gh auth git-credential',
+                                          '-C', '/tmp', 'push', 'origin', 'ref']), 'push')
+        self.assertEqual(n.git_operation(['git', '-c', 'unknown=password']), 'unknown')
+
+    def test_missing_consumer_write_scope_refuses_before_any_mutation(self):
+        with patch.object(n, 'gh', return_value={'permissions': {'push': False}}):
+            with self.assertRaisesRegex(n.Refusal, 'CONTENTS_WRITE_DENIED') as cm:
+                n.consumer_write_capability('Mikeyphw/MMRL')
+        self.assertIn('MMRL_FEDERATION_TOKEN', str(cm.exception))
+        with patch.object(n, 'gh', return_value={'permissions': {'push': True}}):
+            n.consumer_write_capability('Mikeyphw/MMRL')
+        # No explicit permission field proves nothing and must not be called
+        # a passed authorization; the later actual push is still decisive.
+        with patch.object(n, 'gh', return_value={}):
+            n.consumer_write_capability('Mikeyphw/MMRL')
+
+    def test_all_consumer_write_capabilities_checked_before_first_push(self):
+        a = {'action': 'create-pr', 'consumer': 'mmrl-next',
+             'parent': OLD, 'checkout': '/tmp/none'}
+        b = {'action': 'create-pr', 'consumer': 'mmrl-lsposed',
+             'parent': OLD, 'checkout': '/tmp/none'}
+        with patch.object(n, 'latest_validated_source'), \
+             patch.object(n, 'prepare', side_effect=[a, b]), \
+             patch.object(n, 'consumer_write_capability', side_effect=[None,
+                       n.Refusal('second consumer lacks write rights')]) as verify, \
+             patch.object(n, 'commit_and_push', side_effect=AssertionError('unsafe partial push')):
+            with self.assertRaisesRegex(n.Refusal, 'second consumer'):
+                n.execute(NEW, 'apply')
+        self.assertEqual(verify.call_count, 2)
+
+    def test_failed_consumer_git_push_has_public_identity_and_no_secret(self):
+        with patch.object(n, 'git') as g, \
+             patch.object(n, 'run', return_value='a' * 40), \
+             patch.object(n, 'ref', return_value=NEW):
+            # Trigger only push failure; other Git object operations are mocked.
+            g.side_effect = lambda root, *args: (
+                (_ for _ in ()).throw(n.Refusal('git push failed '
+                         '(category=REPOSITORY_ACCESS_DENIED, exit=128); '
+                         'raw provider output suppressed'))
+                if args[0] == 'push' else
+                OLD if args[:1] == ('show',) else 'c' * 40 if args[:1] == ('rev-parse',) else 'b' * 40)
+            row = {'checkout': '/tmp/nonexistent', 'parent': OLD,
+                   'target_sha': NEW, 'branch_pin': OLD,
+                   'pin_fixture': n.CONSUMERS[0].pin_fixture,
+                   'base': 'next', 'base_head': NEW, 'branch_head': NEW,
+                   'repository': n.CONSUMERS[0].repo,
+                   'branch': n.branch_for(NEW)}
+            # write-tree must differ from parent tree and use valid SHA;
+            # this test only needs to reach the push refusal, and does not
+            # perform a real Git push.
+            with patch.object(n.subprocess, 'run',
+                       return_value=subprocess.CompletedProcess([], 0, NEW, '')):
+                with self.assertRaises(n.Refusal) as cm:
+                    n.commit_and_push(row)
+        msg = str(cm.exception)
+        self.assertIn('N05F_CONSUMER_PUSH_REFUSED', msg)
+        self.assertIn('Mikeyphw/MMRL', msg)
+        self.assertIn('REPOSITORY_ACCESS_DENIED', msg)
+
     def test_hosted_workflow_and_ci_policy_contracts(self):
         workflow = ((ROOT / 'patch' / 'n05f-propagate.yml')
                     if (ROOT / 'patch' / 'n05f-propagate.yml').is_file()
