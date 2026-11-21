@@ -7,7 +7,8 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / 'src/main/kotlin/io/github/mikeyphw/mmrl/shared'
-FILES = ('ReleaseIdentity.kt', 'Sha256Digest.kt', 'WorkflowArtifact.kt', 'StableSort.kt')
+FILES = ('ReleaseIdentity.kt', 'Sha256Digest.kt', 'WorkflowArtifact.kt', 'StableSort.kt',
+         'OperationContracts.kt')
 
 
 def main() -> None:
@@ -33,6 +34,7 @@ def main() -> None:
     assert 'secrets.' not in workflow and 'workflow_dispatch:' in workflow
     assert 'verify_publication.py' in workflow
     assert (ROOT / 'src/test/kotlin/io/github/mikeyphw/mmrl/shared/SharedCoreTest.kt').is_file()
+    assert (ROOT / 'src/test/kotlin/io/github/mikeyphw/mmrl/shared/OperationContractsTest.kt').is_file()
     print('N05A_PURE_SOURCE_CONTRACT_PASS')
 
 
