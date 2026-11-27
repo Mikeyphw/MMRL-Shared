@@ -5,3 +5,5 @@ out/
 *.iml
 .idea/
 local.properties
+# Devtool runtime state
+/.devtool/
