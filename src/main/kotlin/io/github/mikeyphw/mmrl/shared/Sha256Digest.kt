@@ -1,5 +1,6 @@
 package io.github.mikeyphw.mmrl.shared
 
+import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
 
@@ -41,8 +42,27 @@ class Sha256Digest private constructor(val hex: String) {
             return if (hexPattern.matches(normalized)) Sha256Digest(normalized) else null
         }
 
-        fun calculate(bytes: ByteArray): Sha256Digest = Sha256Digest(
-            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-        )
+        fun calculate(bytes: ByteArray): Sha256Digest = fromBytes(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+        /** Hash the complete stream without accepting more than the explicitly permitted byte budget. */
+        fun calculateBounded(input: InputStream, maxBytes: Long): StreamDigest {
+            require(maxBytes > 0)
+            val sha = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(8192)
+            var total = 0L
+            while (true) {
+                val count = input.read(buffer)
+                if (count == -1) break
+                if (count !in 1..buffer.size || count.toLong() > maxBytes - total) throw IOException("Invalid or oversized digest stream")
+                sha.update(buffer, 0, count)
+                total += count
+            }
+            return StreamDigest(total, fromBytes(sha.digest()))
+        }
+
+        private fun fromBytes(bytes: ByteArray): Sha256Digest = Sha256Digest(bytes.joinToString("") { "%02x".format(it) })
     }
 }
+
+/** Complete byte count and computed SHA-256; not publisher attestation. */
+data class StreamDigest(val bytes: Long, val digest: Sha256Digest) { init { require(bytes >= 0) } }
