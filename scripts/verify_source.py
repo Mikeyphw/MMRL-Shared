@@ -8,10 +8,11 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / 'src/main/kotlin/io/github/mikeyphw/mmrl/shared'
 FILES = ('ReleaseIdentity.kt', 'Sha256Digest.kt', 'WorkflowArtifact.kt', 'StableSort.kt',
-         'OperationContracts.kt')
+         'OperationContracts.kt', 'TransferContracts.kt', 'RepositoryContracts.kt')
 
 
 def main() -> None:
+    assert {p.name for p in PACKAGE.glob('*.kt')} == set(FILES)
     source = [(PACKAGE / name).read_text(encoding='utf-8') for name in FILES]
     assert all(s.startswith('package io.github.mikeyphw.mmrl.shared\n') for s in source)
     for s in source:
@@ -35,6 +36,9 @@ def main() -> None:
     assert 'verify_publication.py' in workflow
     assert (ROOT / 'src/test/kotlin/io/github/mikeyphw/mmrl/shared/SharedCoreTest.kt').is_file()
     assert (ROOT / 'src/test/kotlin/io/github/mikeyphw/mmrl/shared/OperationContractsTest.kt').is_file()
+    for name in ('TransferPolicyCases.kt', 'RepositoryPolicyCases.kt', 'M2M3PolicyTest.kt'):
+        assert (ROOT / 'src/test/kotlin/io/github/mikeyphw/mmrl/shared' / name).is_file()
+    assert (ROOT / 'docs/M2_M3_TRANSFER_REPOSITORY_CONTRACTS.md').is_file()
     print('N05A_PURE_SOURCE_CONTRACT_PASS')
 
 
